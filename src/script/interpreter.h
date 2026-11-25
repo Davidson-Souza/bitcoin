@@ -43,8 +43,8 @@ enum
 
 /** Script verification flags.
  *
- *  All flags are intended to be soft forks: the set of acceptable scripts under
- *  flags (A | B) is a subset of the acceptable scripts under flag (A).
+ *  Flags are intended to be soft forks: scripts accepted under (A | B) are a
+ *  subset of those accepted under (A).
  */
 
 static constexpr script_verify_flags SCRIPT_VERIFY_NONE{0};
@@ -271,6 +271,7 @@ struct ScriptExecutionData
 static constexpr size_t WITNESS_V0_SCRIPTHASH_SIZE = 32;
 static constexpr size_t WITNESS_V0_KEYHASH_SIZE = 20;
 static constexpr size_t WITNESS_V1_TAPROOT_SIZE = 32;
+static constexpr size_t WITNESS_V2_SHRINCS_SIZE = 32;
 
 static constexpr uint8_t TAPROOT_LEAF_MASK = 0xfe;
 static constexpr uint8_t TAPROOT_LEAF_TAPSCRIPT = 0xc0;
@@ -320,6 +321,12 @@ public:
         return false;
     }
 
+    virtual bool CheckShrincsSignature(Span<const unsigned char> sig, Span<const unsigned char> pubkey, ScriptError* serror = nullptr) const
+    {
+        if (serror) *serror = SCRIPT_ERR_SHRINCS_SIG;
+        return false;
+    }
+
     virtual bool CheckLockTime(const CScriptNum& nLockTime) const
     {
          return false;
@@ -355,6 +362,10 @@ enum class MissingDataBehavior
 template<typename T>
 bool SignatureHashSchnorr(uint256& hash_out, ScriptExecutionData& execdata, const T& tx_to, uint32_t in_pos, uint8_t hash_type, SigVersion sigversion, KeyVersion keyversion, const PrecomputedTransactionData& cache, MissingDataBehavior mdb);
 
+/** Fixed, domain-separated all-inputs/all-outputs digest for native witness v2. */
+template <typename T>
+bool SignatureHashShrincs(uint256& hash_out, const T& tx_to, uint32_t in_pos, const PrecomputedTransactionData& cache, MissingDataBehavior mdb);
+
 template <class T>
 class GenericTransactionSignatureChecker : public BaseSignatureChecker
 {
@@ -375,6 +386,7 @@ public:
     GenericTransactionSignatureChecker(const T* txToIn, unsigned int nInIn, const CAmount& amountIn, const PrecomputedTransactionData& txdataIn, MissingDataBehavior mdb) : txTo(txToIn), m_mdb(mdb), nIn(nInIn), amount(amountIn), txdata(&txdataIn) {}
     bool CheckECDSASignature(const std::vector<unsigned char>& scriptSig, const std::vector<unsigned char>& vchPubKey, const CScript& scriptCode, SigVersion sigversion) const override;
     bool CheckSchnorrSignature(Span<const unsigned char> sig, KeyVersion pubkeyver, Span<const unsigned char> pubkey, SigVersion sigversion, ScriptExecutionData& execdata, ScriptError* serror = nullptr) const override;
+    bool CheckShrincsSignature(Span<const unsigned char> sig, Span<const unsigned char> pubkey, ScriptError* serror = nullptr) const override;
     bool CheckLockTime(const CScriptNum& nLockTime) const override;
     bool CheckSequence(const CScriptNum& nSequence) const override;
     bool CheckDefaultCheckTemplateVerifyHash(const Span<const unsigned char>& hash) const override;
@@ -400,6 +412,11 @@ public:
     bool CheckSchnorrSignature(Span<const unsigned char> sig, KeyVersion pubkeyver, Span<const unsigned char> pubkey, SigVersion sigversion, ScriptExecutionData& execdata, ScriptError* serror = nullptr) const override
     {
         return m_checker.CheckSchnorrSignature(sig, pubkeyver, pubkey, sigversion, execdata, serror);
+    }
+
+    bool CheckShrincsSignature(Span<const unsigned char> sig, Span<const unsigned char> pubkey, ScriptError* serror = nullptr) const override
+    {
+        return m_checker.CheckShrincsSignature(sig, pubkey, serror);
     }
 
     bool CheckLockTime(const CScriptNum& nLockTime) const override

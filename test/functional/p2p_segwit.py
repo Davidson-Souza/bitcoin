@@ -1353,8 +1353,8 @@ class SegWitTest(BitcoinTestFramework):
         assert_equal(len(self.nodes[1].getrawmempool()), 0)
         for version in list(range(OP_1, OP_16 + 1)) + [OP_0]:
             # First try to spend to a future version segwit script_pubkey.
-            if version == OP_1:
-                # Don't use 32-byte v1 witness (used by Taproot; see BIP 341)
+            if version in (OP_1, OP_2):
+                # The 32-byte programs are assigned to Taproot and SHRINCS.
                 script_pubkey = CScript([CScriptOp(version), witness_hash + b'\x00'])
             else:
                 script_pubkey = CScript([CScriptOp(version), witness_hash])
@@ -1369,9 +1369,9 @@ class SegWitTest(BitcoinTestFramework):
         self.generate(self.nodes[0], 1)  # Mine all the transactions
         assert len(self.nodes[0].getrawmempool()) == 0
 
-        # Finally, verify that version 0 -> version 2 transactions
-        # are standard
-        script_pubkey = CScript([CScriptOp(OP_2), witness_hash])
+        # Finally, verify that sending from version 0 to an unassigned version 2
+        # program is standard.
+        script_pubkey = CScript([CScriptOp(OP_2), witness_hash + b'\x00'])
         tx2 = CTransaction()
         tx2.vin = [CTxIn(COutPoint(tx.sha256, 0), b"")]
         tx2.vout = [CTxOut(tx.vout[0].nValue - 1000, script_pubkey)]
@@ -1384,7 +1384,7 @@ class SegWitTest(BitcoinTestFramework):
         temp_utxo.pop()  # last entry in temp_utxo was the output we just spent
         temp_utxo.append(UTXO(tx2.sha256, 0, tx2.vout[0].nValue))
 
-        # Spend everything in temp_utxo into an segwit v1 output.
+        # Spend everything in temp_utxo into an unassigned version 2 output.
         tx3 = CTransaction()
         total_value = 0
         for i in temp_utxo:

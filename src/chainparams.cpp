@@ -116,6 +116,8 @@ void ReadSigNetArgs(const ArgsManager& args, CChainParams::SigNetOptions& option
             throw std::runtime_error(strprintf("-signetchallenge must be hex, not '%s'.", signet_challenge[0]));
         }
         options.challenge.emplace(*val);
+        // Restrict experimental deployment overrides to dedicated signets.
+        HandleDeploymentArgs(args, options.dep_opts);
     }
     HandleRenounceArgs(args, options.renounce);
 }

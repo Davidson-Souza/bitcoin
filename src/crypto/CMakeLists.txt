@@ -2,6 +2,25 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or https://opensource.org/license/mit/.
 
+# Keep the unmodified C library separate from Core's C++ compile options.
+add_library(bitcoin_libshrincs STATIC EXCLUDE_FROM_ALL
+  libshrincs/src/sha256.c
+  libshrincs/src/thash.c
+  libshrincs/src/util.c
+  libshrincs/src/wots.c
+  shrincs_bridge.c
+)
+set_target_properties(bitcoin_libshrincs PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED YES
+  C_EXTENSIONS NO
+)
+target_include_directories(bitcoin_libshrincs PRIVATE libshrincs/include)
+target_link_libraries(bitcoin_libshrincs PRIVATE sanitize_interface)
+if(BUILD_KERNEL_LIB)
+  set_target_properties(bitcoin_libshrincs PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()
+
 add_library(bitcoin_crypto STATIC EXCLUDE_FROM_ALL
   aes.cpp
   chacha20.cpp
@@ -18,6 +37,7 @@ add_library(bitcoin_crypto STATIC EXCLUDE_FROM_ALL
   sha256_sse4.cpp
   sha3.cpp
   sha512.cpp
+  shrincs.cpp
   siphash.cpp
   ../support/cleanse.cpp
 )
@@ -25,6 +45,7 @@ add_library(bitcoin_crypto STATIC EXCLUDE_FROM_ALL
 target_link_libraries(bitcoin_crypto
   PRIVATE
     core_interface
+    bitcoin_libshrincs
 )
 
 if(HAVE_SSE41)

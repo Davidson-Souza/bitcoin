@@ -248,6 +248,11 @@ bool CScript::IsPayToWitnessScriptHash() const
             (*this)[1] == 0x20);
 }
 
+bool CScript::IsPayToWitnessShrincs() const
+{
+    return size() == 34 && (*this)[0] == OP_2 && (*this)[1] == 32;
+}
+
 // A witness program is any valid CScript that consists of a 1-byte push opcode
 // followed by a data push between 2 and 40 bytes.
 bool CScript::IsWitnessProgram(int& version, std::vector<unsigned char>& program) const

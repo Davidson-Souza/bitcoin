@@ -87,12 +87,14 @@ add_executable(test_bitcoin
   script_p2sh_tests.cpp
   script_parse_tests.cpp
   script_segwit_tests.cpp
+  script_shrincs_tests.cpp
   script_standard_tests.cpp
   script_tests.cpp
   scriptnum_tests.cpp
   serfloat_tests.cpp
   serialize_tests.cpp
   settings_tests.cpp
+  shrincs_tests.cpp
   sighash_tests.cpp
   sigopcount_tests.cpp
   skiplist_tests.cpp
@@ -136,6 +138,7 @@ target_json_data_sources(test_bitcoin
   data/key_io_invalid.json
   data/key_io_valid.json
   data/script_tests.json
+  data/shrincs_vectors.json
   data/sighash.json
   data/tx_invalid.json
   data/tx_valid.json

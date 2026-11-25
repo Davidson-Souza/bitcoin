@@ -1,0 +1,7 @@
+{
+    "binana": [2026, 16383, 0],
+    "deployment": "SHRINCS",
+    "start": -2,
+    "timeout": 9223372036854775807,
+    "scriptverify": true
+}

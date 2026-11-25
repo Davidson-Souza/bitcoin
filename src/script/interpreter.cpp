@@ -9,6 +9,7 @@
 #include <crypto/ripemd160.h>
 #include <crypto/sha1.h>
 #include <crypto/sha256.h>
+#include <crypto/shrincs.h>
 #include <pubkey.h>
 #include <script/script.h>
 #include <tinyformat.h>
@@ -1656,17 +1657,16 @@ void PrecomputedTransactionData::Init(const T& txTo, std::vector<CTxOut>&& spent
     bool uses_bip341_taproot = force;
     for (size_t inpos = 0; inpos < txTo.vin.size() && !(uses_bip143_segwit && uses_bip341_taproot); ++inpos) {
         if (!txTo.vin[inpos].scriptWitness.IsNull()) {
-            if (m_spent_outputs_ready && m_spent_outputs[inpos].scriptPubKey.size() == 2 + WITNESS_V1_TAPROOT_SIZE &&
-                m_spent_outputs[inpos].scriptPubKey[0] == OP_1) {
-                // Treat every witness-bearing spend with 34-byte scriptPubKey that starts with OP_1 as a Taproot
-                // spend. This only works if spent_outputs was provided as well, but if it wasn't, actual validation
-                // will fail anyway. Note that this branch may trigger for scriptPubKeys that aren't actually segwit
-                // but in that case validation will fail as SCRIPT_ERR_WITNESS_UNEXPECTED anyway.
+            if (m_spent_outputs_ready &&
+                ((m_spent_outputs[inpos].scriptPubKey.size() == 2 + WITNESS_V1_TAPROOT_SIZE &&
+                  m_spent_outputs[inpos].scriptPubKey[0] == OP_1) ||
+                 m_spent_outputs[inpos].scriptPubKey.IsPayToWitnessShrincs())) {
+                // Taproot and SHRINCS both commit to all spent amounts and scripts.
+                // Without spent_outputs, actual validation will fail anyway.
                 uses_bip341_taproot = true;
             } else {
-                // Treat every spend that's not known to native witness v1 as a Witness v0 spend. This branch may
-                // also be taken for unknown witness versions, but it is harmless, and being precise would require
-                // P2SH evaluation to find the redeemScript.
+                // Treat other witness-bearing spends as witness v0 for precomputation.
+                // This can include unknown versions, but the extra hashing is harmless.
                 uses_bip143_segwit = true;
             }
         }
@@ -1725,6 +1725,31 @@ static bool HandleMissingData(MissingDataBehavior mdb)
     }
     assert(!"Unknown MissingDataBehavior value");
 }
+
+template <typename T>
+bool SignatureHashShrincs(uint256& hash_out, const T& tx_to, uint32_t in_pos, const PrecomputedTransactionData& cache, MissingDataBehavior mdb)
+{
+    if (in_pos >= tx_to.vin.size()) return false;
+    if (!cache.m_bip341_taproot_ready || !cache.m_spent_outputs_ready) return HandleMissingData(mdb);
+
+    // No optional sighash modes: every input, spent output and output is committed.
+    static const HashWriter HASHER_SHRINCS{TaggedHash("ShrincsSighash")};
+    HashWriter ss{HASHER_SHRINCS};
+    ss << uint8_t{0}; // Epoch
+    ss << tx_to.version;
+    ss << tx_to.nLockTime;
+    ss << cache.m_prevouts_single_hash;
+    ss << cache.m_spent_amounts_single_hash;
+    ss << cache.m_spent_scripts_single_hash;
+    ss << cache.m_sequences_single_hash;
+    ss << cache.m_outputs_single_hash;
+    ss << in_pos;
+    hash_out = ss.GetSHA256();
+    return true;
+}
+
+template bool SignatureHashShrincs(uint256&, const CTransaction&, uint32_t, const PrecomputedTransactionData&, MissingDataBehavior);
+template bool SignatureHashShrincs(uint256&, const CMutableTransaction&, uint32_t, const PrecomputedTransactionData&, MissingDataBehavior);
 
 template<typename T>
 bool SignatureHashSchnorr(uint256& hash_out, ScriptExecutionData& execdata, const T& tx_to, uint32_t in_pos, uint8_t hash_type, SigVersion sigversion, KeyVersion keyversion, const PrecomputedTransactionData& cache, MissingDataBehavior mdb)
@@ -2011,6 +2036,23 @@ bool GenericTransactionSignatureChecker<T>::CheckSchnorrSignature(Span<const uns
     }
     if (!VerifySchnorrSignature(sig, pubkey_xonly, sighash)) return set_error(serror, SCRIPT_ERR_SCHNORR_SIG);
     return true;
+}
+
+template <class T>
+bool GenericTransactionSignatureChecker<T>::CheckShrincsSignature(Span<const unsigned char> sig, Span<const unsigned char> pubkey, ScriptError* serror) const
+{
+    if (pubkey.size() != SHRINCS_PUBLIC_KEY_SIZE || sig.empty() || sig.size() > SHRINCS_MAX_SIGNATURE_SIZE) {
+        return set_error(serror, SCRIPT_ERR_SHRINCS_SIG);
+    }
+    if (!txdata) {
+        HandleMissingData(m_mdb);
+        return set_error(serror, SCRIPT_ERR_SHRINCS_SIG);
+    }
+    uint256 sighash;
+    if (!SignatureHashShrincs(sighash, *txTo, nIn, *txdata, m_mdb) || !VerifyShrincs(sig, pubkey, sighash)) {
+        return set_error(serror, SCRIPT_ERR_SHRINCS_SIG);
+    }
+    return set_success(serror);
 }
 
 template <class T>
@@ -2324,6 +2366,19 @@ static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, 
             }
             return set_success(serror);
         }
+    } else if (witversion == 2 && program.size() == WITNESS_V2_SHRINCS_SIZE && !is_p2sh) {
+        // Native v2 commits to the full SHRINCS public key with SHA256.
+        if (!(flags & SCRIPT_VERIFY_SHRINCS)) return set_success(serror);
+        if (stack.empty()) return set_error(serror, SCRIPT_ERR_WITNESS_PROGRAM_WITNESS_EMPTY);
+        if (stack.size() != 2) return set_error(serror, SCRIPT_ERR_WITNESS_PROGRAM_MISMATCH);
+        const valtype& pubkey = stack.back();
+        if (pubkey.size() != SHRINCS_PUBLIC_KEY_SIZE) return set_error(serror, SCRIPT_ERR_WITNESS_PROGRAM_MISMATCH);
+        uint256 hash_pubkey;
+        CSHA256().Write(pubkey.data(), pubkey.size()).Finalize(hash_pubkey.begin());
+        if (memcmp(hash_pubkey.begin(), program.data(), WITNESS_V2_SHRINCS_SIZE)) {
+            return set_error(serror, SCRIPT_ERR_WITNESS_PROGRAM_MISMATCH);
+        }
+        return checker.CheckShrincsSignature(stack.front(), pubkey, serror);
     } else if (!is_p2sh && CScript::IsPayToAnchor(witversion, program)) {
         return true;
     } else {
